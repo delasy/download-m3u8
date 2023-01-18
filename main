@@ -163,6 +163,18 @@ fn M3U8ParserSectionAttr_parse (data: str) M3U8ParserSectionAttr {
   return result
 }
 
+fn loadData () str[][] {
+  lines := fs_readFileSync("data.txt").str().trim().lines()
+  mut result: str[][]
+
+  loop i := 0; i < lines.len; i++ {
+    parts := str_split(lines[i], ": ")
+    result.push([parts[0].trim(), parts[1].trim()])
+  }
+
+  return result
+}
+
 fn downloadM3U8 (data: str[][]) {
   fs_mkdirSync("original-m3u8")
   print("Created original-m3u8/")
@@ -230,13 +242,7 @@ fn downloadVideos (data: str[][]) {
 }
 
 main {
-  lines := fs_readFileSync("data.txt").str().trim().lines()
-  mut data: str[][]
-
-  loop i := 0; i < lines.len; i++ {
-    parts := str_split(lines[i], ": ")
-    data.push([parts[0].trim(), parts[1].trim()])
-  }
+  data := loadData()
 
   if !fs_existsSync("original-m3u8") {
     downloadM3U8(data)
