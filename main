@@ -1,0 +1,252 @@
+fn str_split (self: str, delimiter := "") str[] {
+  delimiterLen := delimiter.len
+  mut result: str[]
+
+  if delimiterLen == 0 {
+    loop i := 0; i < self.len; i++ {
+      result.push(self[i].str())
+    }
+
+    return result
+  }
+
+  mut text := ""
+
+  loop i := 0; i < self.len; i++ {
+    if self.slice(i, i + delimiterLen) == delimiter {
+      i += delimiterLen - 1
+      result.push(text)
+      text = ""
+    } else {
+      text += self[i].str()
+    }
+  }
+
+  result.push(text)
+  return result
+}
+
+obj M3U8Parser {
+  mut sections: M3U8ParserSection[]
+
+  fn removeSections (mut self: ref Self, indexes: int...) {
+    loop i := 0; i < indexes.len; i++ {
+      idx: int = indexes[i]
+      self.sections[idx].removed = true
+    }
+  }
+
+  fn stringify (self: ref Self) str {
+    mut stringifiedSections: str[]
+
+    loop i := 0; i < self.sections.len; i++ {
+      section := self.sections[i]
+
+      if section.removed {
+        continue
+      }
+
+      stringifiedSections.push(section.stringify())
+    }
+
+    return stringifiedSections.join(os_EOL) + os_EOL
+  }
+}
+
+obj M3U8ParserSection {
+  name: str
+  mut value: str
+  mut attrs: M3U8ParserSectionAttr[]
+  mut removed: bool
+
+  fn updateAttr (mut self: ref Self, name: str, value: str) {
+    loop i := 0; i < self.attrs.len; i++ {
+      mut attr := self.attrs[i]
+
+      if attr.name == name {
+        attr.value = value
+        break
+      }
+    }
+  }
+
+  fn stringify (self: ref Self) str {
+    mut result := self.name
+
+    if !self.attrs.empty() {
+      mut stringifiedAttrs: str
+
+      loop i := 0; i < self.attrs.len; i++ {
+        attr := self.attrs[i]
+        stringifiedAttrs += stringifiedAttrs.empty() ? "" : ","
+        stringifiedAttrs += attr.stringify()
+      }
+
+      result += ":" + stringifiedAttrs
+    }
+
+    if !self.value.empty() {
+      result += os_EOL + self.value
+    }
+
+    return result
+  }
+}
+
+obj M3U8ParserSectionAttr {
+  name: str
+  mut value: str
+  mut escaped: bool
+
+  fn stringify (self: ref Self) str {
+    if self.value.empty() {
+      return self.name
+    } elif self.escaped {
+      return self.name + "=\"" + self.value + "\""
+    } else {
+      return self.name + "=" + self.value
+    }
+  }
+}
+
+fn M3U8Parser_parse (data: str) M3U8Parser {
+  mut result: M3U8Parser
+  lines := data.lines()
+
+  loop i := 0; i < lines.len; i++ {
+    line := lines[i].trim()
+
+    if line.len > 0 && line[0] == '#' {
+      result.sections.push(M3U8ParserSection_parse(line))
+    } elif line.len > 0 {
+      result.sections[result.sections.len - 1].value = line
+    }
+  }
+
+  return result
+}
+
+fn M3U8ParserSection_parse (data: str) M3U8ParserSection {
+  colonPos := data.find(":")
+
+  if colonPos == -1 {
+    return M3U8ParserSection{name: data}
+  }
+
+  mut result := M3U8ParserSection{name: data.slice(0, colonPos)}
+  attrs := str_split(data.slice(colonPos + 1), ",")
+
+  loop i := 0; i < attrs.len; i++ {
+    result.attrs.push(M3U8ParserSectionAttr_parse(attrs[i]))
+  }
+
+  return result
+}
+
+fn M3U8ParserSectionAttr_parse (data: str) M3U8ParserSectionAttr {
+  equalsPos := data.find("=")
+
+  if equalsPos == -1 {
+    return M3U8ParserSectionAttr{name: data}
+  }
+
+  mut result := M3U8ParserSectionAttr{
+    name: data.slice(0, equalsPos),
+    value: data.slice(equalsPos + 1)
+  }
+
+  if result.value[0] == '"' {
+    result.escaped = true
+    result.value = result.value.slice(1, -1)
+  }
+
+  return result
+}
+
+fn downloadM3U8 (data: str[][]) {
+  fs_mkdirSync("original-m3u8")
+  print("Created original-m3u8/")
+
+  loop i := 0; i < data.len; i++ {
+    name := data[i][0]
+    url := data[i][1]
+
+    mut req := request_open("GET", url)
+    res := request_read(ref req)
+    request_close(ref req)
+
+    fileName := "original-m3u8/" + name + ".m3u8"
+    fs_writeFileSync(fileName, res.data)
+    print("Created", fileName)
+  }
+}
+
+fn transformM3U8 (data: str[][]) {
+  fs_mkdirSync("transformed-m3u8")
+  print("Created transformed-m3u8/")
+
+  loop i := 0; i < data.len; i++ {
+    name: str = data[i][0]
+    masterData := fs_readFileSync("original-m3u8/" + name + ".m3u8")
+
+    mut parser := M3U8Parser_parse(masterData.str())
+
+    if parser.sections.len > 10 {
+      parser.removeSections(3, 5, 6, 8, 9, 10)
+    } elif parser.sections.len > 8 {
+      parser.removeSections(3, 5, 6, 8)
+    } else {
+      print(name, "does not have correct number of sections")
+      continue
+    }
+
+    parser.sections[4].updateAttr("AUTOSELECT", "YES")
+    parser.sections[4].updateAttr("DEFAULT", "YES")
+
+    fileName := "transformed-m3u8/" + name + ".m3u8"
+    fs_writeFileSync(fileName, parser.stringify().toBuffer())
+    print("Created", fileName)
+  }
+}
+
+fn downloadVideos (data: str[][]) {
+  fs_mkdirSync("downloads")
+  print("Created downloads/")
+
+  loop i := 0; i < data.len; i++ {
+    name: str = data[i][0]
+    transformedName := "transformed-m3u8/" + name + ".m3u8"
+    videoName := "downloads/" + name + ".mp4"
+
+    process_runSync(
+      "ffmpeg " +
+      "-protocol_whitelist crypto,file,http,https,tcp,tls " +
+      "-i " + transformedName + " " +
+      "-c copy " + videoName
+    )
+
+    print("Downloaded", name)
+  }
+}
+
+main {
+  lines := fs_readFileSync("data.txt").str().trim().lines()
+  mut data: str[][]
+
+  loop i := 0; i < lines.len; i++ {
+    parts := str_split(lines[i], ": ")
+    data.push([parts[0].trim(), parts[1].trim()])
+  }
+
+  if !fs_existsSync("original-m3u8") {
+    downloadM3U8(data)
+  }
+
+  if !fs_existsSync("transformed-m3u8") {
+    transformM3U8(data)
+  }
+
+  if !fs_existsSync("downloads") {
+    downloadVideos(data)
+  }
+}

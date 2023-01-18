@@ -1,0 +1,5 @@
+build/
+downloads/
+original-m3u8/
+transformed-m3u8/
+data.txt
