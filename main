@@ -59,6 +59,18 @@ obj M3U8ParserSection {
   mut attrs: M3U8ParserSectionAttr[]
   mut removed: bool
 
+  fn getAttr (mut self: ref Self, name: str) str {
+    loop i := 0; i < self.attrs.len; i++ {
+      mut attr := self.attrs[i]
+
+      if attr.name == name {
+        return attr.value
+      }
+    }
+
+    return ""
+  }
+
   fn updateAttr (mut self: ref Self, name: str, value: str) {
     loop i := 0; i < self.attrs.len; i++ {
       mut attr := self.attrs[i]
@@ -163,8 +175,8 @@ fn M3U8ParserSectionAttr_parse (data: str) M3U8ParserSectionAttr {
   return result
 }
 
-fn loadData () str[][] {
-  lines := fs_readFileSync("data.txt").str().trim().lines()
+fn loadData (file: str) str[][] {
+  lines := fs_readFileSync(file).str().trim().lines()
   mut result: str[][]
 
   loop i := 0; i < lines.len; i++ {
@@ -175,9 +187,9 @@ fn loadData () str[][] {
   return result
 }
 
-fn downloadM3U8 (data: str[][]) {
-  fs_mkdirSync("original-m3u8")
-  print("Created original-m3u8/")
+fn downloadM3U8 (destdir: str, data: str[][]) {
+  fs_mkdirSync(destdir)
+  print("Created", destdir + "/")
 
   loop i := 0; i < data.len; i++ {
     name := data[i][0]
@@ -187,48 +199,67 @@ fn downloadM3U8 (data: str[][]) {
     res := request_read(ref req)
     request_close(ref req)
 
-    fileName := "original-m3u8/" + name + ".m3u8"
+    fileName := destdir + "/" + name + ".m3u8"
     fs_writeFileSync(fileName, res.data)
     print("Created", fileName)
   }
 }
 
-fn transformM3U8 (data: str[][]) {
-  fs_mkdirSync("transformed-m3u8")
-  print("Created transformed-m3u8/")
+fn transformM3U8 (srcdir: str, destdir: str, data: str[][]) {
+  fs_mkdirSync(destdir)
+  print("Created", destdir + "/")
 
   loop i := 0; i < data.len; i++ {
     name: str = data[i][0]
-    masterData := fs_readFileSync("original-m3u8/" + name + ".m3u8")
+    masterData := fs_readFileSync(srcdir + "/" + name + ".m3u8")
 
     mut parser := M3U8Parser_parse(masterData.str())
+    mut foundAudio := false
+    mut foundVideo := false
 
-    if parser.sections.len > 10 {
-      parser.removeSections(3, 5, 6, 8, 9, 10)
-    } elif parser.sections.len > 8 {
-      parser.removeSections(3, 5, 6, 8)
-    } else {
-      print(name, "does not have correct number of sections")
-      continue
+    loop i := 0; i < parser.sections.len; i++ {
+      parserSection := parser.sections[i]
+
+      if (
+        parserSection.name == "#EXT-X-MEDIA" &&
+        parserSection.getAttr("TYPE") == "AUDIO"
+      ) {
+        isEngAudio := parserSection.getAttr("NAME").slice(0, 3) == "eng"
+        shouldRemove := foundAudio || !isEngAudio
+
+        if shouldRemove {
+          parser.removeSections(i)
+          continue
+        }
+
+        parserSection.updateAttr("AUTOSELECT", "YES")
+        parserSection.updateAttr("DEFAULT", "YES")
+        parserSection.updateAttr("NAME", "eng")
+        foundAudio = true
+      } elif parserSection.name == "#EXT-X-STREAM-INF" {
+        if foundVideo {
+          parser.removeSections(i)
+          continue
+        }
+
+        foundVideo = true
+      }
     }
 
-    parser.sections[4].updateAttr("AUTOSELECT", "YES")
-    parser.sections[4].updateAttr("DEFAULT", "YES")
-
-    fileName := "transformed-m3u8/" + name + ".m3u8"
+    fileName := destdir + "/" + name + ".m3u8"
     fs_writeFileSync(fileName, parser.stringify().toBuffer())
     print("Created", fileName)
   }
 }
 
-fn downloadVideos (data: str[][]) {
-  fs_mkdirSync("downloads")
-  print("Created downloads/")
+fn downloadVideos (srcdir: str, destdir: str, data: str[][]) {
+  fs_mkdirSync(destdir)
+  print("Created", destdir + "/")
 
   loop i := 0; i < data.len; i++ {
     name: str = data[i][0]
-    transformedName := "transformed-m3u8/" + name + ".m3u8"
-    videoName := "downloads/" + name + ".mp4"
+    transformedName := srcdir + "/" + name + ".m3u8"
+    videoName := destdir + "/" + name + ".mp4"
 
     process_runSync(
       "ffmpeg " +
@@ -242,17 +273,17 @@ fn downloadVideos (data: str[][]) {
 }
 
 main {
-  data := loadData()
+  data := loadData("data.txt")
 
   if !fs_existsSync("original-m3u8") {
-    downloadM3U8(data)
+    downloadM3U8("original-m3u8", data)
   }
 
   if !fs_existsSync("transformed-m3u8") {
-    transformM3U8(data)
+    transformM3U8("original-m3u8", "transformed-m3u8", data)
   }
 
   if !fs_existsSync("downloads") {
-    downloadVideos(data)
+    downloadVideos("transformed-m3u8", "downloads", data)
   }
 }
